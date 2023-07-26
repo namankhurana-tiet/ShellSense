@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+import sys
+
+import openai
+
+EXAMPLES_CONTEXT = "Linux bash command to accomplish the task"
+
+# You can uncomment examples to affect the results, but more examples costs
+# more to process.
+EXAMPLES = [
+    #["Get the last 5 lines of foo.txt", "tail -n 5 foo.txt"],
+    ["Find files ending in \"log\" in the root directory",
+        "find / -name \"*.log\""],
+    ["Look up the IP address 12.34.56.78",
+        "nslookup 12.34.56.78"],
+    #["Convert example.png to a JPEG",
+    #    "convert example.png example.jpg"],
+    ["Create a git branch called feature1",
+        "git checkout -b feature1"]
+]
+
+MODEL = "davinci"
+
+def get_command_openai(prompt):
+    results = openai.Answer.create(
+        search_model=MODEL,
+        model=MODEL,
+        question=prompt,
+        examples_context=EXAMPLES_CONTEXT,
+        examples=EXAMPLES,
+        max_tokens=200,
+        documents=[],
+        stop=["\n", "<|endoftext|>"],
+    )
+    if results:
+        return results['answers'][0]
+
+def main():
+    cmd = " ".join(sys.argv[1:])
+    if cmd.strip() == "":
+        raise ValueError("No command given")
+    result = get_command_openai(cmd)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()

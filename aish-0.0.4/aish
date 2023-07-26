@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import readline
+import signal
+import subprocess
+import sys
+
+from colorama import Fore, Style
+import openai
+import requests
+
+
+EXAMPLES_CONTEXT = "Linux bash command to accomplish the task"
+
+REVERSE_EXAMPLES_CONTEXT = "English description of Linux bash command"
+
+
+GRAND_AUTH_SECRET = os.getenv('GRAND_AUTH_SECRET')
+GRAND_AUTH_KEY = os.getenv('GRAND_AUTH_KEY')
+
+
+# You can uncomment examples to affect the results, but more examples costs
+# more to process.
+EXAMPLES = [
+    #["Get the last 5 lines of foo.txt", "tail -n 5 foo.txt"],
+    ["Find files ending in \"log\" in the root directory",
+        "find / -name \"*.log\""],
+    ["Look up the IP address 12.34.56.78",
+        "nslookup 12.34.56.78"],
+    #["Convert example.png to a JPEG",
+    #    "convert example.png example.jpg"],
+    ["Create a git branch called feature1",
+        "git checkout -b feature1"]
+]
+
+MODEL = "davinci"
+
+
+def get_command_openai(prompt):
+    results = openai.Answer.create(
+        search_model=MODEL,
+        model=MODEL,
+        question=prompt,
+        examples_context=EXAMPLES_CONTEXT,
+        examples=EXAMPLES,
+        max_tokens=200,
+        documents=[],
+        stop=["\n", "<|endoftext|>"],
+    )
+    if results:
+        return results['answers'][0]
+
+
+def get_command_openai_codex(prompt):
+    results = openai.Completion.create(
+        engine="davinci-codex",
+        prompt="# Linux bash one-liner\n# " + prompt.strip() + "\n$",
+        max_tokens=100,
+        temperature=0,
+        stop=["\n", "<|endoftext|>"]
+    )
+    if results:
+        #print(results)
+        return results['choices'][0]['text'].strip()
+
+def get_command_grand(prompt):
+    header = EXAMPLES_CONTEXT + "\n\n"
+    for e in EXAMPLES:
+        header += "Q: " + e[0] + "\n"
+        header += "A: " + e[1] + "\n\n"
+
+    header += "Q: " + prompt + "\n"
+    header += "A:"
+    req = requests.post('https://api.usegrand.com/generate',
+        headers={
+            'x-auth-key': GRAND_AUTH_KEY,
+            'x-auth-secret': GRAND_AUTH_SECRET,
+        },
+        json={
+            "text": header,
+            "model_id": "Ukg1ClHdlG03aG7cAu8J", # ID of GPT-J-6B modela
+            "creativity": 1,
+            "stop": "<newline>",
+            "max": 100,
+            "only_response": True
+        }
+    )
+    response = req.json()
+
+    if response.get('ok') != True:
+        raise Exception(f"Error from Grand: {response.get('reason')}")
+    else:
+        return response.get('data').get('text').strip()
+
+
+def get_description_openai(command):
+    results = openai.Answer.create(
+        search_model=MODEL,
+        model=MODEL,
+        question=command,
+        examples_context=REVERSE_EXAMPLES_CONTEXT,
+        examples=reverse_pairs(EXAMPLES),
+        max_tokens=200,
+        documents=[],
+        stop=["\n", "<|endoftext|>"],
+    )
+    if results:
+        return results['answers'][0]
+
+
+def get_description_grand(command):
+    question = (REVERSE_EXAMPLES_CONTEXT + "\n\n" +
+        "Q: " + command + "\n" + "A:")
+
+    req = requests.post('https://api.usegrand.com/generate',
+        headers={
+            'x-auth-key': GRAND_AUTH_KEY,
+            'x-auth-secret': GRAND_AUTH_SECRET,
+        },
+        json={
+            "text": question,
+            "model_id": "Ukg1ClHdlG03aG7cAu8J", # ID of GPT-J-6B modela
+            "creativity": 1,
+            "stop": "<newline>",
+            "max": 100,
+            "only_response": True
+        }
+    )
+    response = req.json()
+
+    if response.get('ok') != True:
+        raise Exception(f"Error from Grand: {response.get('reason')}")
+    else:
+        return response.get('data').get('text').strip()
+
+
+get_command = None
+get_description = None
+
+if "OPENAI_API_KEY" in os.environ:
+    print("Using OpenAI")
+    get_command = get_command_openai
+    get_description = get_description_openai
+
+elif "GRAND_AUTH_KEY" in os.environ:
+    print("Using Grand")
+    get_command = get_command_grand
+    get_description = get_description_grand
+
+
+if get_command is None:
+    print("No Grand API key or OpenAI API key found. "
+        "Please set GRAND_AUTH_KEY/GRAND_AUTH_SECRET or OPENAI_API_KEY.")
+    sys.exit(1)
+
+
+def reverse_pairs(ls):
+    return [(b, a) for a, b in ls]
+
+
+def main():
+    CURRENT_JOB = None
+    LIVE_DANGEROUSLY = False
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--live-dangerously", help="Don't confirm commands before running", action="store_true")
+    parser.add_argument("--reverse", help="The AI describes your bash command in natural language", action="store_true")
+    args = parser.parse_args()
+    if args.live_dangerously:
+        print(f"{Fore.RED}{Style.BRIGHT}YOU WILL NOT BE GIVEN A CHANCE TO APPROVE OR CANCEL THE AI-GENERATED COMMAND. THIS IS A BAD IDEA AND YOU SHOULD EXIT NOW.{Style.RESET_ALL}")
+        LIVE_DANGEROUSLY = True
+
+    while True:
+        try:
+            request = input(f'\001{Fore.GREEN}{Style.BRIGHT}\002~> \001{Style.RESET_ALL}\002')
+        except EOFError:
+            print("")
+            print(f"{Fore.GREEN}{Style.BRIGHT}<~ {Fore.CYAN}{Style.NORMAL}Farewell, human.{Style.RESET_ALL}")
+            sys.exit(0)
+        except KeyboardInterrupt:
+            print("")
+            continue
+
+        if not request.strip(): #checks if entered command is empty
+            continue
+
+        if request.startswith("cd "):  #change some part here
+            os.chdir(request[3:])
+            continue
+
+        if request.strip() == "cd":
+            os.chdir(os.path.expanduser('~'))
+            continue
+
+        # if request.strip() == "pwd":
+        #     print(f"{Fore.GREEN}{Style.BRIGHT}<~ {Fore.YELLOW}{Style.NORMAL}" + os.getcwd() + Style.RESET_ALL)
+        #     continue
+
+        # if request.strip() == "clear":
+        #     subprocess.run(["clear"], shell=True)
+        #     continue
+
+       
+
+        if args.reverse:
+
+            command = request
+            practice.main(-2, command)
+
+        else : 
+        #  LIVE_DANGEROUSLY:
+                try:
+                    approved = input(f"\001{Fore.GREEN}{Style.BRIGHT}\002<~ \001{Fore.CYAN}{Style.NORMAL}\002" + new_command + "\001" + Style.RESET_ALL + "\002")
+                except (EOFError, KeyboardInterrupt):
+                    print(f"\n{Fore.RED}{Style.BRIGHT}<~ Canceled{Style.RESET_ALL}")
+                    continue
+            else:
+                print(f"{Fore.GREEN}{Style.BRIGHT}<~ {Fore.CYAN}{Style.NORMAL}" + new_command + Style.RESET_ALL)
+        else:
+            new_command = request
+            description = get_description(request)
+            if not description:
+                print(f"{Fore.RED}{Style.BRIGHT}<~ Couldn't describe command{Style.RESET_ALL}")
+                continue
+            if not LIVE_DANGEROUSLY:
+                try:
+                    approved = input(f"\001{Fore.GREEN}{Style.BRIGHT}\002<~ \001{Fore.CYAN}{Style.NORMAL}\002" + description + "\001" + Style.RESET_ALL + "\002")
+                except (EOFError, KeyboardInterrupt):
+                    print(f"\n{Fore.RED}{Style.BRIGHT}<~ Canceled{Style.RESET_ALL}")
+                    continue
+            else:
+                print(f"{Fore.GREEN}{Style.BRIGHT}<~ {Fore.CYAN}{Style.NORMAL}" + description + Style.RESET_ALL)
+
+
+        CURRENT_JOB = subprocess.Popen(["bash", "-c", new_command])
+        try:
+            CURRENT_JOB.wait()
+        except KeyboardInterrupt:
+            #os.kill(CURRENT_JOB.pid, signal.SIGINT)
+            pass
+
+
+if __name__ == "__main__":
+    main()
